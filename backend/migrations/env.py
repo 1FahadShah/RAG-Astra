@@ -1,10 +1,18 @@
 
+from pathlib import Path
+import sys
 from logging.config import fileConfig
 
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
+BACKEND_PATH = str(Path(__file__).resolve().parents[1])
+if BACKEND_PATH not in sys.path:
+    sys.path.insert(0, BACKEND_PATH)
+
 from app.core.config import get_settings
+from app.db.base import Base
+
 
 config = context.config
 
@@ -12,7 +20,7 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 settings = get_settings()
-target_metadata = None
+target_metadata = Base.metadata
 
 if settings.database_url:
     config.set_main_option(
