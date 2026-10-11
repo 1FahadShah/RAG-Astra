@@ -13,6 +13,7 @@ if BACKEND_PATH not in sys.path:
 from app.core.config import get_settings
 from app.db.base import Base
 
+from app.models import Document
 
 config = context.config
 
