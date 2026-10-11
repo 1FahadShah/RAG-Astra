@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     app_version: str = "0.1.0"
     environment: str = "development"
     api_v1_prefix: str = "/api/v1"
+    database_url: str | None = None
 
     model_config = SettingsConfigDict(
         env_file=".env",
