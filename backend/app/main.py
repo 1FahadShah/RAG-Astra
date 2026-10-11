@@ -1,10 +1,14 @@
 
 from fastapi import FastAPI
 
+from app.core.config import get_settings
+
+settings = get_settings()
+
 app = FastAPI(
-    title="RAG-Astra API",
+    title=settings.app_name,
     description="Enterprise AI Knowledge & Decision System",
-    version="0.1.0",
+    version=settings.app_version,
 )
 
 
@@ -14,4 +18,5 @@ def health_check() -> dict[str, str]:
     return {
         "status": "ok",
         "service": "rag-astra-api",
+        "environment": settings.environment,
     }
