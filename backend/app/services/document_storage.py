@@ -2,6 +2,7 @@
 import hashlib
 import os
 import uuid
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -12,9 +13,39 @@ from app.core.config import get_settings
 
 CHUNK_SIZE = 1024 * 1024
 
+CONTENT_TYPES = {
+    ".pdf": "application/pdf",
+    ".docx": (
+        "application/vnd.openxmlformats-officedocument."
+        "wordprocessingml.document"
+    ),
+    ".txt": "text/plain",
+    ".md": "text/markdown",
+}
+
 
 class DocumentUploadError(Exception):
-    """Raised when a document cannot be safely stored."""
+    """Base exception for document upload failures."""
+
+    status_code = 400
+
+
+class UnsupportedDocumentType(DocumentUploadError):
+    """The extension or actual document format is unsupported."""
+
+    status_code = 415
+
+
+class DocumentTooLarge(DocumentUploadError):
+    """The upload exceeds the configured size limit."""
+
+    status_code = 413
+
+
+class InvalidDocumentContent(DocumentUploadError):
+    """The file content does not match its declared format."""
+
+    status_code = 415
 
 
 @dataclass(frozen=True)
@@ -34,15 +65,74 @@ def _safe_extension(filename: str) -> str:
 
     if extension not in settings.allowed_document_extensions:
         allowed = ", ".join(settings.allowed_document_extensions)
-        raise DocumentUploadError(
+        raise UnsupportedDocumentType(
             f"Unsupported file extension. Allowed extensions: {allowed}"
         )
 
     return extension
 
 
+def _validate_content(path: Path, extension: str) -> None:
+    """Validate file content rather than trusting its filename."""
+
+    if extension == ".pdf":
+        with path.open("rb") as source:
+            if source.read(5) != b"%PDF-":
+                raise InvalidDocumentContent(
+                    "The file does not have a valid PDF signature."
+                )
+        return
+
+    if extension == ".docx":
+        try:
+            with zipfile.ZipFile(path) as archive:
+                names = set(archive.namelist())
+
+                required_entries = {
+                    "[Content_Types].xml",
+                    "word/document.xml",
+                }
+
+                if not required_entries.issubset(names):
+                    raise InvalidDocumentContent(
+                        "The file is not a valid DOCX document."
+                    )
+
+                if archive.testzip() is not None:
+                    raise InvalidDocumentContent(
+                        "The DOCX archive contains a corrupted file."
+                    )
+
+        except zipfile.BadZipFile as exc:
+            raise InvalidDocumentContent(
+                "The file is not a valid DOCX archive."
+            ) from exc
+
+        return
+
+    if extension in {".txt", ".md"}:
+        try:
+            with path.open("rb") as source:
+                while True:
+                    chunk = source.read(CHUNK_SIZE)
+                    if not chunk:
+                        break
+
+                    if b"\x00" in chunk:
+                        raise InvalidDocumentContent(
+                            "Text documents must not contain null bytes."
+                        )
+
+                    chunk.decode("utf-8")
+
+        except UnicodeDecodeError as exc:
+            raise InvalidDocumentContent(
+                "Text documents must contain valid UTF-8 text."
+            ) from exc
+
+
 async def store_upload(upload: UploadFile) -> StoredDocument:
-    """Stream an upload to private local storage with a size limit."""
+    """Stream, validate and store an upload with a size limit."""
 
     settings = get_settings()
 
@@ -71,7 +161,7 @@ async def store_upload(upload: UploadFile) -> StoredDocument:
                 total_bytes += len(chunk)
 
                 if total_bytes > settings.max_upload_size_bytes:
-                    raise DocumentUploadError(
+                    raise DocumentTooLarge(
                         "File exceeds the maximum upload size of "
                         f"{settings.max_upload_size_bytes} bytes."
                     )
@@ -85,14 +175,14 @@ async def store_upload(upload: UploadFile) -> StoredDocument:
         if total_bytes == 0:
             raise DocumentUploadError("Empty files are not allowed.")
 
+        _validate_content(destination, extension)
+
         return StoredDocument(
             storage_key=storage_key,
             checksum_sha256=checksum.hexdigest(),
             file_size_bytes=total_bytes,
             original_filename=original_filename,
-            content_type=(
-                upload.content_type or "application/octet-stream"
-            ),
+            content_type=CONTENT_TYPES[extension],
         )
 
     except Exception:

@@ -12,6 +12,7 @@ from starlette.datastructures import Headers
 
 from app.services.document_storage import (
     DocumentUploadError,
+    InvalidDocumentContent,
     delete_stored_document,
     store_upload,
 )
@@ -51,7 +52,7 @@ class TestDocumentStorage(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_valid_upload_is_stored_with_checksum(self):
-        content = b"sample PDF"
+        content = b"%PDF-1.4\n"
 
         result = await store_upload(
             self.make_upload("report.pdf", content)
@@ -66,14 +67,25 @@ class TestDocumentStorage(unittest.IsolatedAsyncioTestCase):
             result.checksum_sha256,
             hashlib.sha256(content).hexdigest(),
         )
+        self.assertEqual(result.content_type, "application/pdf")
         self.assertEqual(
             Path(result.storage_key).name,
             result.storage_key,
         )
 
+    async def test_invalid_pdf_signature_is_rejected(self):
+        with self.assertRaises(InvalidDocumentContent):
+            await store_upload(
+                self.make_upload("fake.pdf", b"not a PDF")
+            )
+
+        self.assertEqual(list(self.storage_path.iterdir()), [])
+
     async def test_empty_upload_is_rejected(self):
         with self.assertRaises(DocumentUploadError):
-            await store_upload(self.make_upload("empty.pdf", b""))
+            await store_upload(
+                self.make_upload("empty.pdf", b"")
+            )
 
         self.assertEqual(list(self.storage_path.iterdir()), [])
 
