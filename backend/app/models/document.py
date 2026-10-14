@@ -23,6 +23,7 @@ class Document(Base):
     content_type: Mapped[str] = mapped_column(String(127), nullable=False)
     file_size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
     checksum_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    storage_key: Mapped[str | None] = mapped_column(String(255), nullable=True,)
 
     status: Mapped[str] = mapped_column(
         String(32),
