@@ -59,17 +59,13 @@ class ExtractionResult:
         )
         return separator.join(unit.text for unit in self.units)
 
+
 def _normalise_text(text: str) -> str:
-    """Normalise line endings and remove unnecessary whitespace."""
+    """Normalise line endings and trim unnecessary whitespace."""
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     lines = [line.strip() for line in text.split("\n")]
-    normalised_lines = []
+    return "\n".join(lines).strip()
 
-    for line in lines:
-        if line:
-            normalised_lines.append(line)
-
-    return "\n".join(normalised_lines).strip()
 
 
 def _resolve_stored_path(storage_key: str) -> Path:

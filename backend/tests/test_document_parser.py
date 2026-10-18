@@ -33,10 +33,7 @@ class DocumentParserTests(unittest.TestCase):
 
     def test_extracts_utf8_text_file(self):
         path = self.storage_dir / "sample.txt"
-        path.write_text(
-            "  First line  \r\nSecond line  ",
-            encoding="utf-8",
-        )
+        path.write_bytes(b"  First line  \r\nSecond line  ")
 
         result = extract_document("sample.txt", "original.txt")
 
@@ -60,6 +57,7 @@ class DocumentParserTests(unittest.TestCase):
         self.assertIn("# Getting Started", result.full_text)
         self.assertIn("- Install Python", result.full_text)
         self.assertEqual(result.source_format, "md")
+        self.assertIn("\n\n", result.full_text)
 
     def test_extracts_pdf_with_page_provenance(self):
         path = self.storage_dir / "sample.pdf"
