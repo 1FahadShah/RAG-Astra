@@ -178,6 +178,10 @@ class TestDocumentProcessingPostgres(unittest.TestCase):
                     )
                 ],
             ),
+            patch(
+                "app.services.document_processing.embed_documents",
+                return_value=[[0.1] * 384],
+            ),
             ThreadPoolExecutor(max_workers=1) as executor,
         ):
             first_request = executor.submit(process_in_own_session)
