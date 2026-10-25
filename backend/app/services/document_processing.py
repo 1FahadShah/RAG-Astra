@@ -1,15 +1,15 @@
 
 from uuid import UUID
 
+from sqlalchemy import delete, update
 from sqlalchemy.orm import Session
 
 from app.models.document import Document
+from app.models.document_chunk import DocumentChunk
 from app.services.chunk_persistence import persist_document_chunks
 from app.services.document_chunker import chunk_document
 from app.services.document_parser import extract_document
-from sqlalchemy import delete
 
-from app.models.document_chunk import DocumentChunk
 
 class DocumentProcessingError(Exception):
     """Raised when a document cannot be processed."""
@@ -24,25 +24,44 @@ class InvalidDocumentStateError(DocumentProcessingError):
 
 
 def process_document(db: Session, document_id: UUID) -> Document:
-    """Extract, chunk, and persist a pending document.
+    """Atomically claim and process a pending or failed document.
 
-    The processing status is committed first. Chunks and the final ready
-    status are committed together in a second transaction.
+    The processing status is committed before extraction begins.
+    Chunk replacement and the final ready status share one transaction.
     """
+    claim_result = db.execute(
+        update(Document)
+        .where(
+            Document.id == document_id,
+            Document.status.in_(("pending", "failed")),
+        )
+        .values(status="processing")
+        .returning(Document.id)
+    )
+
+    claimed_document_id = claim_result.scalar_one_or_none()
+
+    if claimed_document_id is None:
+        db.rollback()
+
+        existing_document = db.get(Document, document_id)
+
+        if existing_document is None:
+            raise DocumentNotFoundError("Document was not found.")
+
+        raise InvalidDocumentStateError(
+            "Cannot process a document with status "
+            f"'{existing_document.status}'."
+        )
+
+    db.commit()
+
     document = db.get(Document, document_id)
 
     if document is None:
         raise DocumentNotFoundError("Document was not found.")
 
-    if document.status not in {"pending", "failed"}:
-        raise InvalidDocumentStateError(
-            f"Cannot process a document with status '{document.status}'."
-        )
-
     try:
-        document.status = "processing"
-        db.commit()
-
         if not document.storage_key:
             raise DocumentProcessingError(
                 "The document has no stored file."
@@ -59,6 +78,7 @@ def process_document(db: Session, document_id: UUID) -> Document:
                 "Document processing produced no chunks."
             )
 
+        # Replace old chunks atomically with the new chunks.
         db.execute(
             delete(DocumentChunk).where(
                 DocumentChunk.document_id == document.id
@@ -74,12 +94,12 @@ def process_document(db: Session, document_id: UUID) -> Document:
     except Exception:
         db.rollback()
 
-        # Record failure in a separate transaction so the failed status
-        # survives rollback of chunk persistence.
+        # Preserve the failure status in a separate transaction.
         failed_document = db.get(Document, document_id)
 
         if failed_document is not None:
             failed_document.status = "failed"
+
             try:
                 db.commit()
             except Exception:
