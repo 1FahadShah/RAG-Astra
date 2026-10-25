@@ -4,6 +4,7 @@ import uuid
 from unittest.mock import MagicMock, patch
 
 from app.models.document import Document
+from app.models.document_chunk import DocumentChunk as StoredDocumentChunk
 from app.services.document_chunker import DocumentChunk
 from app.services.document_parser import (
     ExtractionResult,
@@ -14,6 +15,7 @@ from app.services.document_processing import (
     InvalidDocumentStateError,
     process_document,
 )
+from app.services.embedding_service import EMBEDDING_DIMENSION
 
 
 class TestDocumentProcessing(unittest.TestCase):
@@ -57,6 +59,16 @@ class TestDocumentProcessing(unittest.TestCase):
         ]
 
     def test_success_marks_document_ready(self):
+        stored_chunk = StoredDocumentChunk(
+            id=uuid.uuid4(),
+            document_id=self.document_id,
+            chunk_index=0,
+            text=self.chunks[0].text,
+            char_count=len(self.chunks[0].text),
+        )
+
+        vectors = [[0.1] * EMBEDDING_DIMENSION]
+
         with (
             patch(
                 "app.services.document_processing.extract_document",
@@ -68,8 +80,15 @@ class TestDocumentProcessing(unittest.TestCase):
             ) as chunk,
             patch(
                 "app.services.document_processing.persist_document_chunks",
-                return_value=[],
-            ) as persist,
+                return_value=[stored_chunk],
+            ) as persist_chunks,
+            patch(
+                "app.services.document_processing.embed_documents",
+                return_value=vectors,
+            ) as embed,
+            patch(
+                "app.services.document_processing.persist_chunk_embeddings",
+            ) as persist_embeddings,
         ):
             result = process_document(self.db, self.document_id)
 
@@ -81,10 +100,16 @@ class TestDocumentProcessing(unittest.TestCase):
             "guide.txt",
         )
         chunk.assert_called_once_with(self.extraction)
-        persist.assert_called_once_with(
+        persist_chunks.assert_called_once_with(
             self.db,
             self.document_id,
             self.chunks,
+        )
+        embed.assert_called_once_with([stored_chunk.text])
+        persist_embeddings.assert_called_once_with(
+            self.db,
+            [stored_chunk],
+            vectors,
         )
 
         self.assertEqual(self.db.execute.call_count, 2)
@@ -108,6 +133,9 @@ class TestDocumentProcessing(unittest.TestCase):
                     "simulated persistence failure"
                 ),
             ),
+            patch(
+                "app.services.document_processing.embed_documents",
+            ) as embed,
         ):
             with self.assertRaisesRegex(
                 RuntimeError,
@@ -115,9 +143,97 @@ class TestDocumentProcessing(unittest.TestCase):
             ):
                 process_document(self.db, self.document_id)
 
+        embed.assert_not_called()
         self.assertEqual(self.db.execute.call_count, 2)
         self.db.rollback.assert_called_once()
         self.assertEqual(self.document.status, "failed")
+        self.assertEqual(self.db.commit.call_count, 2)
+
+    def test_embedding_generation_failure_marks_document_failed(self):
+        stored_chunk = StoredDocumentChunk(
+            id=uuid.uuid4(),
+            document_id=self.document_id,
+            chunk_index=0,
+            text=self.chunks[0].text,
+            char_count=len(self.chunks[0].text),
+        )
+
+        with (
+            patch(
+                "app.services.document_processing.extract_document",
+                return_value=self.extraction,
+            ),
+            patch(
+                "app.services.document_processing.chunk_document",
+                return_value=self.chunks,
+            ),
+            patch(
+                "app.services.document_processing.persist_document_chunks",
+                return_value=[stored_chunk],
+            ),
+            patch(
+                "app.services.document_processing.embed_documents",
+                side_effect=RuntimeError(
+                    "simulated embedding failure"
+                ),
+            ),
+            patch(
+                "app.services.document_processing.persist_chunk_embeddings",
+            ) as persist_embeddings,
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "simulated embedding failure",
+            ):
+                process_document(self.db, self.document_id)
+
+        persist_embeddings.assert_not_called()
+        self.assertEqual(self.document.status, "failed")
+        self.assertEqual(self.db.rollback.call_count, 1)
+        self.assertEqual(self.db.commit.call_count, 2)
+
+    def test_embedding_persistence_failure_marks_document_failed(self):
+        stored_chunk = StoredDocumentChunk(
+            id=uuid.uuid4(),
+            document_id=self.document_id,
+            chunk_index=0,
+            text=self.chunks[0].text,
+            char_count=len(self.chunks[0].text),
+        )
+        vectors = [[0.1] * EMBEDDING_DIMENSION]
+
+        with (
+            patch(
+                "app.services.document_processing.extract_document",
+                return_value=self.extraction,
+            ),
+            patch(
+                "app.services.document_processing.chunk_document",
+                return_value=self.chunks,
+            ),
+            patch(
+                "app.services.document_processing.persist_document_chunks",
+                return_value=[stored_chunk],
+            ),
+            patch(
+                "app.services.document_processing.embed_documents",
+                return_value=vectors,
+            ),
+            patch(
+                "app.services.document_processing.persist_chunk_embeddings",
+                side_effect=RuntimeError(
+                    "simulated embedding persistence failure"
+                ),
+            ),
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "simulated embedding persistence failure",
+            ):
+                process_document(self.db, self.document_id)
+
+        self.assertEqual(self.document.status, "failed")
+        self.assertEqual(self.db.rollback.call_count, 1)
         self.assertEqual(self.db.commit.call_count, 2)
 
     def test_missing_document_is_rejected(self):
@@ -183,6 +299,9 @@ class TestDocumentProcessing(unittest.TestCase):
             patch(
                 "app.services.document_processing.persist_document_chunks",
             ) as persist,
+            patch(
+                "app.services.document_processing.embed_documents",
+            ) as embed,
         ):
             with self.assertRaisesRegex(
                 Exception,
@@ -191,6 +310,7 @@ class TestDocumentProcessing(unittest.TestCase):
                 process_document(self.db, self.document_id)
 
         persist.assert_not_called()
+        embed.assert_not_called()
         self.assertEqual(self.db.execute.call_count, 1)
         self.assertEqual(self.document.status, "failed")
 

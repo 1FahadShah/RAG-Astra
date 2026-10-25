@@ -9,6 +9,8 @@ from app.models.document_chunk import DocumentChunk
 from app.services.chunk_persistence import persist_document_chunks
 from app.services.document_chunker import chunk_document
 from app.services.document_parser import extract_document
+from app.services.embedding_persistence import persist_chunk_embeddings
+from app.services.embedding_service import embed_documents
 
 
 class DocumentProcessingError(Exception):
@@ -27,7 +29,8 @@ def process_document(db: Session, document_id: UUID) -> Document:
     """Atomically claim and process a pending or failed document.
 
     The processing status is committed before extraction begins.
-    Chunk replacement and the final ready status share one transaction.
+    Chunk replacement, embedding persistence, and the final ready
+    status share one transaction.
     """
     claim_result = db.execute(
         update(Document)
@@ -78,14 +81,28 @@ def process_document(db: Session, document_id: UUID) -> Document:
                 "Document processing produced no chunks."
             )
 
-        # Replace old chunks atomically with the new chunks.
+        # Replace old chunks and their embeddings atomically.
         db.execute(
             delete(DocumentChunk).where(
                 DocumentChunk.document_id == document.id
             )
         )
 
-        persist_document_chunks(db, document.id, chunks)
+        stored_chunks = persist_document_chunks(
+            db,
+            document.id,
+            chunks,
+        )
+
+        embeddings = embed_documents(
+            [chunk.text for chunk in stored_chunks]
+        )
+
+        persist_chunk_embeddings(
+            db,
+            stored_chunks,
+            embeddings,
+        )
 
         document.status = "ready"
         db.commit()
