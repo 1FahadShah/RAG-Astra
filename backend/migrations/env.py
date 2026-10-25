@@ -52,8 +52,26 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
+
 def run_migrations_online() -> None:
-    """Run migrations using a live database connection."""
+    """Run migrations using a supplied connection or configured database."""
+
+    # Allow integration tests and other callers to supply an explicitly
+    # configured connection, such as one isolated to a test schema.
+    supplied_connection = config.attributes.get("connection")
+
+    if supplied_connection is not None:
+        context.configure(
+            connection=supplied_connection,
+            target_metadata=target_metadata,
+            compare_type=True,
+        )
+
+        with context.begin_transaction():
+            context.run_migrations()
+
+        return
+
     if not settings.database_url:
         raise RuntimeError(
             "DATABASE_URL is not configured. "
@@ -75,6 +93,7 @@ def run_migrations_online() -> None:
 
         with context.begin_transaction():
             context.run_migrations()
+
 
 
 if context.is_offline_mode():
