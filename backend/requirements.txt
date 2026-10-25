@@ -7,3 +7,5 @@ psycopg[binary]
 python-multipart
 pymupdf
 python-docx
+pgvector
+sentence-transformers
