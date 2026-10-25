@@ -68,18 +68,49 @@ class TestDocumentProcessing(unittest.TestCase):
 
         self.assertIs(result, self.document)
         self.assertEqual(result.status, "ready")
+
         extract.assert_called_once_with(
             "stored-guide.txt",
             "guide.txt",
         )
         chunk.assert_called_once_with(self.extraction)
+        self.db.execute.assert_called_once()
         persist.assert_called_once_with(
             self.db,
             self.document_id,
             self.chunks,
         )
+
         self.assertEqual(self.db.commit.call_count, 2)
         self.db.rollback.assert_not_called()
+
+    def test_persistence_failure_marks_document_failed(self):
+        with (
+            patch(
+                "app.services.document_processing.extract_document",
+                return_value=self.extraction,
+            ),
+            patch(
+                "app.services.document_processing.chunk_document",
+                return_value=self.chunks,
+            ),
+            patch(
+                "app.services.document_processing.persist_document_chunks",
+                side_effect=RuntimeError(
+                    "simulated persistence failure"
+                ),
+            ),
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "simulated persistence failure",
+            ):
+                process_document(self.db, self.document_id)
+
+        self.db.execute.assert_called_once()
+        self.db.rollback.assert_called_once()
+        self.assertEqual(self.document.status, "failed")
+        self.assertEqual(self.db.commit.call_count, 2)
 
     def test_missing_document_is_rejected(self):
         self.db.get.return_value = None
@@ -100,7 +131,9 @@ class TestDocumentProcessing(unittest.TestCase):
     def test_extraction_failure_marks_document_failed(self):
         with patch(
             "app.services.document_processing.extract_document",
-            side_effect=RuntimeError("simulated extraction failure"),
+            side_effect=RuntimeError(
+                "simulated extraction failure"
+            ),
         ):
             with self.assertRaisesRegex(
                 RuntimeError,
@@ -133,6 +166,7 @@ class TestDocumentProcessing(unittest.TestCase):
                 process_document(self.db, self.document_id)
 
         persist.assert_not_called()
+        self.db.execute.assert_not_called()
         self.assertEqual(self.document.status, "failed")
 
 

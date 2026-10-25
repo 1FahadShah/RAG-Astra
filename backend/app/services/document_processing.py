@@ -7,7 +7,9 @@ from app.models.document import Document
 from app.services.chunk_persistence import persist_document_chunks
 from app.services.document_chunker import chunk_document
 from app.services.document_parser import extract_document
+from sqlalchemy import delete
 
+from app.models.document_chunk import DocumentChunk
 
 class DocumentProcessingError(Exception):
     """Raised when a document cannot be processed."""
@@ -56,6 +58,12 @@ def process_document(db: Session, document_id: UUID) -> Document:
             raise DocumentProcessingError(
                 "Document processing produced no chunks."
             )
+
+        db.execute(
+            delete(DocumentChunk).where(
+                DocumentChunk.document_id == document.id
+            )
+        )
 
         persist_document_chunks(db, document.id, chunks)
 
