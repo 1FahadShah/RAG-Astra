@@ -1,3 +1,12 @@
+import uuid
+
+from app.services.document_parser import DocumentParsingError
+from app.services.document_processing import (
+    DocumentNotFoundError,
+    DocumentProcessingError,
+    InvalidDocumentStateError,
+    process_document,
+)
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from sqlalchemy.orm import Session
@@ -113,4 +122,42 @@ async def upload_document(
         raise HTTPException(
             status_code=500,
             detail="Unable to persist document metadata.",
+        ) from exc
+
+
+
+@router.post(
+    "/{document_id}/process",
+    response_model=DocumentResponse,
+)
+def process_document_endpoint(
+    document_id: uuid.UUID,
+    db: Session = Depends(get_db),
+) -> DocumentResponse:
+    """Process a stored document and return its updated metadata."""
+    try:
+        return process_document(db, document_id)
+
+    except DocumentNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=str(exc),
+        ) from exc
+
+    except InvalidDocumentStateError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=str(exc),
+        ) from exc
+
+    except (DocumentProcessingError, DocumentParsingError) as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="Document processing failed. Check the stored document.",
+        ) from exc
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="An internal error occurred during document processing.",
         ) from exc
